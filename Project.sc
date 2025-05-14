@@ -91,15 +91,6 @@ object Main extends App {
       BigDecimal(0)
   }
 
-  //transactions.take(10).foreach { trx =>
-  //  val discount = calculateDiscount(trx, discountRules)
-  //  val finalPrice = trx.unitPrice * trx.quantity * (1 - discount / 100)
-  //  println(s"Product: ${trx.product}")
-  //  println(s"  Discount: $discount%")
-  //  println(s"  Final Price: $finalPrice")
-  //  println()
-  //}
-
   case class FinalTransaction(
                                transaction: Transaction, // the original row
                                discount: BigDecimal, // the calculated discount
@@ -121,14 +112,18 @@ object Main extends App {
       log("INFO", s"Processed transaction for ${trx.product} with $discount% discount")
       FinalTransaction(trx, discount, finalPrice) // wrap into result case class
     }
-  //Testing purposes
-  //val finalResults = processTransactions(transactions)
-  //finalResults.take(15).foreach { ft =>
-  //  val t = ft.transaction
-  //  println(s"Product: ${t.product} | Quantity: ${t.quantity} | Discount: ${ft.discount}% | Final Price: ${ft.finalPrice}")
-  //}
 
-  //close
+  val finalResults = processTransactions(transactions)
+
+  val outputWriter = new PrintWriter("D:/ITI/Scala/ScalaCode/src/main/scala/Labs/final_transactions.csv")
+  outputWriter.println("product,quantity,unit_price,discount,final_price")
+
+  finalResults.foreach { ft =>
+    val t = ft.transaction
+    outputWriter.println(s"${t.product},${t.quantity},${t.unitPrice},${ft.discount},${ft.finalPrice}")
+  }
+
+  outputWriter.close()
   logWriter.close()
 
 }
