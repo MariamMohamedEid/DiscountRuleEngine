@@ -62,13 +62,13 @@ If more than one rule qualifies, the system averages the top two discounts and u
    );
    Update DB credentials in the code:
 
-Update DB credentials in the code 
-val url = "jdbc:postgresql://localhost:5432/retail_db"
-val user = "user"
-val password = "123"
+## Update DB credentials in the code 
+- val url = "jdbc:postgresql://localhost:5432/retail_db"
+- val user = "user"
+- val password = "123"
 
-Add dependencies in build.sbt:
-libraryDependencies += "org.typelevel" %% "cats-core" % "2.10.0"
-libraryDependencies += "org.postgresql" % "postgresql" % "42.7.3"
-Run the main application:
+## Add dependencies in build.sbt:
+- libraryDependencies += "org.typelevel" %% "cats-core" % "2.10.0"
+- libraryDependencies += "org.postgresql" % "postgresql" % "42.7.3"
+## Run the main application:
 sbt run
