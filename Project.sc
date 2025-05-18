@@ -1,4 +1,4 @@
-object Main extends App {
+//object Main extends App {
 
   import java.time.LocalDate
   import java.time.LocalDateTime
@@ -9,17 +9,26 @@ object Main extends App {
   import java.io.File
   import java.io.PrintWriter
 
+  import java.sql.DriverManager
+  import java.sql.PreparedStatement
+  import java.sql.Connection
+
+// case class to hold the parsed records
   case class Transaction(
                           timestamp: LocalDateTime,
                           product: String,
                           expiryDate: LocalDate,
                           quantity: Int,
-                          unitPrice: BigDecimal
+                          unitPrice: BigDecimal,
+                          salesChannel: String,
+                          paymentMethod: String
                         )
 
   val formatterDate = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-
-  val lines = Source.fromFile("D:/ITI/Scala/ScalaCode/src/main/resources/TRX1000.csv").getLines().toList.tail
+ // read input file into a line (excluding header)
+  val source = Source.fromFile("D:/Scala/ScalaCode/src/main/resources/TRX1000.csv")
+  //return an iterator over lines in file and convert it to a list , skips the header
+  val lines = source.getLines().toList.tail
   // gives a collection of all parsed records ready to apply parsed
   // rules on them
   val transactions = lines.map { line =>
@@ -30,7 +39,9 @@ object Main extends App {
       product = cols(1).toLowerCase,
       expiryDate = LocalDate.parse(cols(2), formatterDate),
       quantity = cols(3).toInt,
-      unitPrice = BigDecimal(cols(4))
+      unitPrice = BigDecimal(cols(4)),
+      salesChannel = cols(5).toLowerCase,
+      paymentMethod = cols(6).toLowerCase
     )
   }
 
@@ -67,14 +78,26 @@ object Main extends App {
     case _ => BigDecimal(0) // Should never hit because of qualifier
   }
 
+val isAppSale: Transaction => Boolean = trx => trx.salesChannel == "App"
+val appSaleDiscount: Transaction => BigDecimal = trx => {
+  val roundedQty = ((trx.quantity + 4) / 5) * 5
+  (roundedQty / 5) * 5 // Each step of 5 gives +5%
+}
 
-  val discountRules: List[(Transaction => Boolean, Transaction => BigDecimal)] = List(
+val isVisaPayment: Transaction => Boolean = trx => trx.paymentMethod == "Visa"
+val visaDiscount: Transaction => BigDecimal = _ => BigDecimal(5)
+
+
+val discountRules: List[(Transaction => Boolean, Transaction => BigDecimal)] = List(
     (isExpiringSoon, expiryDiscount),
     (isCheeseOrWine, cheeseOrWineDiscount),
     (isMarch23, march23Discount),
-    (isQuantityEligible, quantityDiscount)
+    (isQuantityEligible, quantityDiscount),
+    (isAppSale, appSaleDiscount),
+    (isVisaPayment, visaDiscount)
   )
 
+// for a given trx go through all rules
   def calculateDiscount(
                          trx: Transaction,
                          rules: List[(Transaction => Boolean, Transaction => BigDecimal)]
@@ -84,7 +107,7 @@ object Main extends App {
       .map { case (_, calculator) => calculator(trx) } // get discount amounts
       .sortBy(_.toDouble)(Ordering[Double].reverse) // sort descending
       .take(2)
-
+  // avg top 1 or 2 discounts else 0
     if (matchedDiscounts.nonEmpty)
       matchedDiscounts.sum / matchedDiscounts.size
     else
@@ -97,7 +120,8 @@ object Main extends App {
                                finalPrice: BigDecimal // price after applying the discount
                              )
 
-  val logWriter = new PrintWriter(new File("D:/ITI/Scala/ScalaCode/src/main/scala/Labs/rules_engine.log"))
+  val logWriter = new PrintWriter(new File("D:/Scala/ScalaCode/src/main/scala/Labs/rules_engine.log"))
+
 
   def log(level: String, message: String): Unit = {
     val timestamp = java.time.LocalDateTime.now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
@@ -115,15 +139,26 @@ object Main extends App {
 
   val finalResults = processTransactions(transactions)
 
-  val outputWriter = new PrintWriter("D:/ITI/Scala/ScalaCode/src/main/scala/Labs/final_transactions.csv")
-  outputWriter.println("product,quantity,unit_price,discount,final_price")
+  val url = "jdbc:postgresql://localhost:5432/retail_db"
+  val user = "user"
+  val password = "123"
+  val conn: Connection = DriverManager.getConnection(url, user, password)
+  val insertStmt: PreparedStatement = conn.prepareStatement(
+    "INSERT INTO final_transactions (product, quantity, unit_price, discount, final_price) VALUES (?, ?, ?, ?, ?)"
+  )
 
-  finalResults.foreach { ft =>
-    val t = ft.transaction
-    outputWriter.println(s"${t.product},${t.quantity},${t.unitPrice},${ft.discount},${ft.finalPrice}")
-  }
-
-  outputWriter.close()
-  logWriter.close()
-
+finalResults.foreach { ft =>
+  val t = ft.transaction
+  insertStmt.setString(1, t.product)
+  insertStmt.setInt(2, t.quantity)
+  insertStmt.setBigDecimal(3, t.unitPrice.bigDecimal)
+  insertStmt.setBigDecimal(4, ft.discount.bigDecimal)
+  insertStmt.setBigDecimal(5, ft.finalPrice.bigDecimal)
+  insertStmt.addBatch()
 }
+
+insertStmt.executeBatch()
+insertStmt.close()
+conn.close()
+logWriter.close()
+source.close()
