@@ -1,6 +1,4 @@
-//object Main extends App {
-
-  import java.time.LocalDate
+ import java.time.LocalDate
   import java.time.LocalDateTime
   import java.time.format.DateTimeFormatter
   import java.time.OffsetDateTime
@@ -8,12 +6,12 @@
   import scala.io.Source
   import java.io.File
   import java.io.PrintWriter
-
   import java.sql.DriverManager
   import java.sql.PreparedStatement
   import java.sql.Connection
 
-// case class to hold the parsed records
+// === Models ===
+// Transaction case class to hold the parsed records from CSV file
   case class Transaction(
                           timestamp: LocalDateTime,
                           product: String,
@@ -23,14 +21,28 @@
                           salesChannel: String,
                           paymentMethod: String
                         )
+ // FinalTransaction hold og transaction and final price after calculating discount
+case class FinalTransaction(
+                             transaction: Transaction, // the original row
+                             discount: BigDecimal, // the calculated discount
+                             finalPrice: BigDecimal // price after applying the discount
+                           )
+// === Logger ===
+val logWriter = new PrintWriter(new File("D:/Scala/ScalaCode/src/main/scala/Labs/rules_engine.log"))
+def log(level: String, message: String): Unit = {
+  val timestamp = java.time.LocalDateTime.now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+  logWriter.println(s"$timestamp     $level     $message")
+  logWriter.flush()
+}
 
+// == File Reading & Parsing
+ log("INFO", "=== Rule Engine Started ===")
+// read lines from CSV file skipping header
   val formatterDate = DateTimeFormatter.ofPattern("yyyy-MM-dd")
- // read input file into a line (excluding header)
   val source = Source.fromFile("D:/Scala/ScalaCode/src/main/resources/TRX1000.csv")
-  //return an iterator over lines in file and convert it to a list , skips the header
   val lines = source.getLines().toList.tail
-  // gives a collection of all parsed records ready to apply parsed
-  // rules on them
+
+// Convert lines to Transaction objects
   val transactions = lines.map { line =>
     val cols = line.split(",").map(_.trim)
     val timestamp = OffsetDateTime.parse(cols(0)).toLocalDateTime
@@ -44,7 +56,8 @@
       paymentMethod = cols(6).toLowerCase
     )
   }
-
+ log("INFO", s"Loaded ${transactions.length} transactions from CSV")
+// === Discount Rules ===
   val isExpiringSoon: Transaction => Boolean = trx =>
     ChronoUnit.DAYS.between(trx.timestamp.toLocalDate, trx.expiryDate) < 30 &&
       ChronoUnit.DAYS.between(trx.timestamp.toLocalDate, trx.expiryDate) >= 1
@@ -78,16 +91,16 @@
     case _ => BigDecimal(0) // Should never hit because of qualifier
   }
 
-val isAppSale: Transaction => Boolean = trx => trx.salesChannel == "App"
+val isAppSale: Transaction => Boolean = trx => trx.salesChannel == "app"
 val appSaleDiscount: Transaction => BigDecimal = trx => {
   val roundedQty = ((trx.quantity + 4) / 5) * 5
   (roundedQty / 5) * 5 // Each step of 5 gives +5%
 }
 
-val isVisaPayment: Transaction => Boolean = trx => trx.paymentMethod == "Visa"
+val isVisaPayment: Transaction => Boolean = trx => trx.paymentMethod == "visa"
 val visaDiscount: Transaction => BigDecimal = _ => BigDecimal(5)
 
-
+ // Combine all rules as (qualifier, calculator) tuples
 val discountRules: List[(Transaction => Boolean, Transaction => BigDecimal)] = List(
     (isExpiringSoon, expiryDiscount),
     (isCheeseOrWine, cheeseOrWineDiscount),
@@ -97,8 +110,10 @@ val discountRules: List[(Transaction => Boolean, Transaction => BigDecimal)] = L
     (isVisaPayment, visaDiscount)
   )
 
-// for a given trx go through all rules
-  def calculateDiscount(
+// === Core Logic ===
+ // For a given transaction, apply all matching rules,
+ // pick top 2 discounts, and return their average.
+ def calculateDiscount(
                          trx: Transaction,
                          rules: List[(Transaction => Boolean, Transaction => BigDecimal)]
                        ): BigDecimal = {
@@ -114,39 +129,32 @@ val discountRules: List[(Transaction => Boolean, Transaction => BigDecimal)] = L
       BigDecimal(0)
   }
 
-  case class FinalTransaction(
-                               transaction: Transaction, // the original row
-                               discount: BigDecimal, // the calculated discount
-                               finalPrice: BigDecimal // price after applying the discount
-                             )
+// === Process Transactions ===
+ // Map each Transaction to FinalTransaction after computing discount and final price
 
-  val logWriter = new PrintWriter(new File("D:/Scala/ScalaCode/src/main/scala/Labs/rules_engine.log"))
-
-
-  def log(level: String, message: String): Unit = {
-    val timestamp = java.time.LocalDateTime.now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-    logWriter.println(s"$timestamp     $level     $message")
-    logWriter.flush()
-  }
-
-  def processTransactions(transactions: List[Transaction]): List[FinalTransaction] =
+ def processTransactions(transactions: List[Transaction]): List[FinalTransaction] =
     transactions.map { trx =>
       val discount = calculateDiscount(trx, discountRules) // apply rules
       val finalPrice = trx.unitPrice * trx.quantity * (1 - discount / 100) // compute price
-      log("INFO", s"Processed transaction for ${trx.product} with $discount% discount")
       FinalTransaction(trx, discount, finalPrice) // wrap into result case class
     }
 
-  val finalResults = processTransactions(transactions)
 
-  val url = "jdbc:postgresql://localhost:5432/retail_db"
+val finalResults = processTransactions(transactions)
+
+log("INFO", s"Finished processing ${finalResults.length} transactions")
+
+// === Writing Final Transactions to Database ====
+ log("INFO", "Connecting To DB")
+
+ val url = "jdbc:postgresql://localhost:5432/retail_db"
   val user = "user"
   val password = "123"
   val conn: Connection = DriverManager.getConnection(url, user, password)
   val insertStmt: PreparedStatement = conn.prepareStatement(
     "INSERT INTO final_transactions (product, quantity, unit_price, discount, final_price) VALUES (?, ?, ?, ?, ?)"
   )
-
+ //log("INFO", "Writing final transactions to database...")
 finalResults.foreach { ft =>
   val t = ft.transaction
   insertStmt.setString(1, t.product)
@@ -157,8 +165,12 @@ finalResults.foreach { ft =>
   insertStmt.addBatch()
 }
 
-insertStmt.executeBatch()
-insertStmt.close()
-conn.close()
-logWriter.close()
-source.close()
+ insertStmt.executeBatch()
+ //log("INFO", "Successfully inserted all transactions into database")
+ insertStmt.close()
+ conn.close()
+ //log("INFO", "Shutting down Rule Engine. Resources closed.")
+ //log("INFO", "Rule Engine completed successfully.")
+ logWriter.close()
+ source.close()
+
